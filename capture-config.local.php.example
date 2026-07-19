@@ -1,0 +1,13 @@
+<?php
+
+// Deploy this as /var/www/capture-config.local.php (OUTSIDE /var/www/html,
+// so it is never web-servable) and fill in real values. Keep it out of git.
+
+return [
+    // Must match DEVICE_CAPTURE_API_KEY on the Home Security Laravel side.
+    // Generate with: php -r "echo bin2hex(random_bytes(32)), PHP_EOL;"
+    'api_key' => 'REPLACE_WITH_A_LONG_RANDOM_SECRET',
+
+    // Full path to the ffmpeg binary on this server, e.g. `which ffmpeg`.
+    'ffmpeg_bin' => '/usr/bin/ffmpeg',
+];
