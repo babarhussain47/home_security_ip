@@ -25,7 +25,7 @@ declare(strict_types=1);
 
 $config = require '/var/www/capture-config.local.php';
 
-const TIMEOUT_SECONDS = 20; // cloud HLS handshake can be slower than local RTSP
+const TIMEOUT_SECONDS = 60; // cloud HLS handshake can be slow, especially over weak camera wifi
 
 function fail(int $status, string $message): never
 {
