@@ -91,7 +91,7 @@ while (true) {
         fclose($pipes[2]);
         proc_close($process);
         @unlink($outputFile);
-        fail(504, 'Capture timed out');
+        fail(504, 'Capture timed out: '.trim(mb_substr($output, -500)));
     }
 
     usleep(100000);
