@@ -20,43 +20,67 @@ declare(strict_types=1);
  *   Body (JSON): { "stream_url": "https://cmgw-sg.easy4ipcloud.com:8890/iot/.../....m3u8?..." }
  *
  * Response: same envelope as capture.php — 200 + image/jpeg bytes on
- * success, or JSON {code, desc, data} on failure.
+ * success, or JSON {code, desc, data} on failure. On success, the
+ * X-Detection-Status header is always one of ok|skipped|error: ok pairs with
+ * X-Detections (JSON counts), error pairs with X-Detection-Error (truncated
+ * message, also logged server-side per 'log_file' in the config).
  */
 
 $config = require '/var/www/capture-config.local.php';
 
 const TIMEOUT_SECONDS = 60; // cloud HLS handshake can be slow, especially over weak camera wifi
 
+function logLine(array $config, string $message): void
+{
+    $logFile = $config['log_file'] ?? sys_get_temp_dir().'/capture-url.log';
+    $line = sprintf('[%s] %s%s', date('Y-m-d H:i:s'), $message, PHP_EOL);
+    @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
+}
+
 function fail(int $status, string $message): never
 {
+    global $config;
+    logLine($config ?? [], "FAIL [$status] $message");
     http_response_code($status);
     header('Content-Type: application/json');
     echo json_encode(['code' => $status, 'desc' => $message, 'data' => new stdClass()]);
     exit;
 }
 
-// Best-effort YOLOv8n classification of the captured frame. Returns null
-// (never throws/fails the request) if the classifier isn't configured or
-// errors out — returning the captured frame is the actual requirement here,
-// detection counts are a bonus.
-function classify(array $config, string $imagePath): ?array
+// Best-effort YOLOv8n classification of the captured frame. Never
+// throws/fails the request if the classifier isn't configured or errors out
+// — returning the captured frame is the actual requirement here, detection
+// counts are a bonus. Status is always reported back via response headers
+// (see X-Detection-Status) and failures are logged, so a silent miss is
+// visible instead of just absent.
+function classify(array $config, string $imagePath): array
 {
     if (empty($config['classifier_python']) || empty($config['classifier_model'])) {
-        return null;
+        return ['status' => 'skipped', 'counts' => null, 'error' => null];
     }
 
     $cmd = sprintf(
-        '%s %s %s %s 2>/dev/null',
+        '%s %s %s %s 2>&1',
         escapeshellarg($config['classifier_python']),
         escapeshellarg(__DIR__.'/classify.py'),
         escapeshellarg($config['classifier_model']),
         escapeshellarg($imagePath),
     );
 
-    $json = shell_exec($cmd);
-    $result = $json !== null ? json_decode($json, true) : null;
+    $output = shell_exec($cmd);
+    $result = $output !== null ? json_decode(trim((string) $output), true) : null;
 
-    return is_array($result) ? ($result['counts'] ?? null) : null;
+    if (is_array($result) && isset($result['counts'])) {
+        return ['status' => 'ok', 'counts' => $result['counts'], 'error' => null];
+    }
+
+    $error = is_array($result) && isset($result['error'])
+        ? $result['error']
+        : trim(mb_substr((string) $output, -500));
+
+    logLine($config, "classification failed: $error");
+
+    return ['status' => 'error', 'counts' => null, 'error' => $error];
 }
 
 $providedKey = $_SERVER['HTTP_X_API_KEY'] ?? '';
@@ -130,7 +154,7 @@ if ($exitCode !== 0 || ! file_exists($outputFile) || filesize($outputFile) === 0
     fail(502, 'Capture failed: '.trim(mb_substr($output, -500)));
 }
 
-$detections = classify($config, $outputFile);
+$detection = classify($config, $outputFile);
 
 $bytes = file_get_contents($outputFile);
 @unlink($outputFile);
@@ -138,7 +162,10 @@ $bytes = file_get_contents($outputFile);
 http_response_code(200);
 header('Content-Type: image/jpeg');
 header('Content-Length: '.strlen($bytes));
-if ($detections !== null) {
-    header('X-Detections: '.json_encode($detections));
+header('X-Detection-Status: '.$detection['status']); // ok | skipped | error
+if ($detection['status'] === 'ok') {
+    header('X-Detections: '.json_encode($detection['counts']));
+} elseif ($detection['status'] === 'error') {
+    header('X-Detection-Error: '.substr((string) $detection['error'], 0, 200));
 }
 echo $bytes;

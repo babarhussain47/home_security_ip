@@ -15,4 +15,9 @@ return [
     // one unset/empty to skip classification entirely (capture still works).
     'classifier_python' => '/opt/classifier/venv/bin/python3',
     'classifier_model' => '/opt/classifier/model/yolov8n.onnx',
+
+    // Optional: where request failures and classifier errors get logged.
+    // Defaults to sys_get_temp_dir().'/capture-url.log' if unset. Must be
+    // writable by the web server user.
+    'log_file' => '/var/log/capture-url.log',
 ];
