@@ -30,6 +30,16 @@ $config = require '/var/www/capture-config.local.php';
 
 const TIMEOUT_SECONDS = 60; // cloud HLS handshake can be slow, especially over weak camera wifi
 
+// Collapses a possibly multi-line traceback/output blob down to one short
+// line for the response header — full detail still goes to the log file.
+function shortError(string $text): string
+{
+    $lines = array_values(array_filter(array_map('trim', explode("\n", $text)), fn ($l) => $l !== ''));
+    $line = end($lines) ?: 'unknown error';
+
+    return mb_substr($line, 0, 150);
+}
+
 function logLine(array $config, string $message): void
 {
     $logFile = $config['log_file'] ?? sys_get_temp_dir().'/capture-url.log';
@@ -95,13 +105,13 @@ function classify(array $config, string $imagePath): array
         return ['status' => 'ok', 'counts' => $result['counts'], 'error' => null];
     }
 
-    $error = is_array($result) && isset($result['error'])
+    $rawError = is_array($result) && isset($result['error'])
         ? $result['error']
-        : trim(mb_substr((string) $output, -500));
+        : trim((string) $output);
 
-    logLine($config, "classification failed: $error");
+    logLine($config, "classification failed: $rawError");
 
-    return ['status' => 'error', 'counts' => null, 'error' => $error];
+    return ['status' => 'error', 'counts' => null, 'error' => shortError($rawError)];
 }
 
 $providedKey = $_SERVER['HTTP_X_API_KEY'] ?? '';
@@ -187,6 +197,6 @@ header('X-Detection-Status: '.$detection['status']); // ok | skipped | error
 if ($detection['status'] === 'ok') {
     header('X-Detections: '.json_encode($detection['counts']));
 } elseif ($detection['error'] !== null) {
-    header('X-Detection-Error: '.substr((string) $detection['error'], 0, 200));
+    header('X-Detection-Error: '.$detection['error']);
 }
 echo $bytes;
