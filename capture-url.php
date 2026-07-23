@@ -6,7 +6,8 @@ declare(strict_types=1);
  * capture-url.php — grabs a single JPEG frame from any ffmpeg-readable
  * stream URL (e.g. an Imou/Tuya cloud live-preview HLS url) and returns the
  * raw JPEG bytes. Deploy alongside capture.php in /var/www/html, sharing its
- * capture-config.local.php.
+ * capture-config.local.php. Also deploy classify.py and model/yolov8n.onnx
+ * (this repo's model/ dir) into the same directory as this script.
  *
  * Laravel resolves the (signed, time-limited) live-preview URL itself via
  * the vendor's Open Platform API (e.g. ImouService::getLiveStreamUrl()) and
@@ -29,6 +30,12 @@ declare(strict_types=1);
 $config = require '/var/www/capture-config.local.php';
 
 const TIMEOUT_SECONDS = 60; // cloud HLS handshake can be slow, especially over weak camera wifi
+
+// Model ships in this repo at model/yolov8n.onnx and is deployed alongside
+// this script, so the path is fixed — no per-server config needed for it.
+// classifier_python still comes from config since the Python env legitimately
+// differs per server (system python3 vs a dedicated venv).
+const MODEL_PATH = __DIR__.'/model/yolov8n.onnx';
 
 // Collapses a possibly multi-line traceback/output blob down to one short
 // line for the response header — full detail still goes to the log file.
@@ -65,26 +72,17 @@ function fail(int $status, string $message): never
 // visible instead of just absent.
 function classify(array $config, string $imagePath): array
 {
-    $missing = [];
     if (empty($config['classifier_python'])) {
-        $missing[] = 'classifier_python';
+        return ['status' => 'skipped', 'counts' => null, 'error' => 'classifier_python not set in capture-config.local.php'];
     }
-    if (empty($config['classifier_model'])) {
-        $missing[] = 'classifier_model';
-    }
-    if ($missing !== []) {
-        $reason = implode(', ', $missing).' not set in capture-config.local.php';
-        return ['status' => 'skipped', 'counts' => null, 'error' => $reason];
-    }
-
     if (! is_file($config['classifier_python'])) {
         $reason = "classifier_python does not exist: {$config['classifier_python']}";
         logLine($config, "classification skipped: $reason");
 
         return ['status' => 'skipped', 'counts' => null, 'error' => $reason];
     }
-    if (! is_file($config['classifier_model'])) {
-        $reason = "classifier_model does not exist: {$config['classifier_model']}";
+    if (! is_file(MODEL_PATH)) {
+        $reason = 'model file missing: '.MODEL_PATH;
         logLine($config, "classification skipped: $reason");
 
         return ['status' => 'skipped', 'counts' => null, 'error' => $reason];
@@ -94,7 +92,7 @@ function classify(array $config, string $imagePath): array
         '%s %s %s %s 2>&1',
         escapeshellarg($config['classifier_python']),
         escapeshellarg(__DIR__.'/classify.py'),
-        escapeshellarg($config['classifier_model']),
+        escapeshellarg(MODEL_PATH),
         escapeshellarg($imagePath),
     );
 

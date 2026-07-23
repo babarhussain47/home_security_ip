@@ -11,10 +11,13 @@ return [
     // Full path to the ffmpeg binary on this server, e.g. `which ffmpeg`.
     'ffmpeg_bin' => '/usr/bin/ffmpeg',
 
-    // Optional: YOLOv8n classification of each captured frame. Leave either
-    // one unset/empty to skip classification entirely (capture still works).
+    // Optional: YOLOv8n classification of each captured frame. Leave unset/
+    // empty to skip classification entirely (capture still works). The model
+    // file itself is bundled in this repo at model/yolov8n.onnx and its path
+    // is fixed in capture-url.php — only the Python interpreter is
+    // per-server (system python3, or a dedicated venv with onnxruntime,
+    // numpy, Pillow installed).
     'classifier_python' => '/opt/classifier/venv/bin/python3',
-    'classifier_model' => '/opt/classifier/model/yolov8n.onnx',
 
     // Optional: where request failures and classifier errors get logged.
     // Defaults to sys_get_temp_dir().'/capture-url.log' if unset. Must be
