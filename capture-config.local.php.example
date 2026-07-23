@@ -23,4 +23,11 @@ return [
     // Defaults to sys_get_temp_dir().'/capture-url.log' if unset. Must be
     // writable by the web server user.
     'log_file' => '/var/log/capture-url.log',
+
+    // Optional debugging aid: overwrites this path with the most recently
+    // captured frame on every request (success, timeout, or capture
+    // failure), so you can eyeball it manually. Leave unset to disable.
+    // IMPORTANT: keep this OUTSIDE /var/www/html — anything under the web
+    // root is publicly downloadable, and these are frames from your camera.
+    'debug_image_path' => '/var/www/debug/tempimage.jpg',
 ];

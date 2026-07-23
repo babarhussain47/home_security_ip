@@ -47,6 +47,17 @@ function shortError(string $text): string
     return mb_substr($line, 0, 150);
 }
 
+// Keeps a copy of the last captured frame at a fixed path for manual
+// inspection, purely a debugging aid — the real response still streams from
+// the per-request tempnam() file so concurrent requests never collide.
+// No-op unless 'debug_image_path' is set in the config.
+function saveDebugImage(array $config, string $capturedFile): void
+{
+    if (! empty($config['debug_image_path']) && file_exists($capturedFile)) {
+        @copy($capturedFile, $config['debug_image_path']);
+    }
+}
+
 function logLine(array $config, string $message): void
 {
     $logFile = $config['log_file'] ?? sys_get_temp_dir().'/capture-url.log';
@@ -167,6 +178,7 @@ while (true) {
         fclose($pipes[1]);
         fclose($pipes[2]);
         proc_close($process);
+        saveDebugImage($config, $outputFile);
         @unlink($outputFile);
         fail(504, 'Capture timed out: '.trim(mb_substr($output, -500)));
     }
@@ -179,9 +191,12 @@ fclose($pipes[2]);
 $exitCode = proc_close($process);
 
 if ($exitCode !== 0 || ! file_exists($outputFile) || filesize($outputFile) === 0) {
+    saveDebugImage($config, $outputFile);
     @unlink($outputFile);
     fail(502, 'Capture failed: '.trim(mb_substr($output, -500)));
 }
+
+saveDebugImage($config, $outputFile);
 
 $detection = classify($config, $outputFile);
 
