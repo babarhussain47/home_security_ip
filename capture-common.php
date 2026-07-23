@@ -82,7 +82,18 @@ function classify(array $config, string $imagePath): array
         escapeshellarg($imagePath),
     );
 
-    $output = shell_exec($cmd);
+    // shell_exec() itself is a fatal (uncatchable in PHP < 8, catchable Error
+    // in PHP 8+) if it's listed in disable_functions on this server — guard
+    // it so a hardened php.ini degrades to status=error instead of a 500
+    // with no body.
+    try {
+        $output = shell_exec($cmd);
+    } catch (\Throwable $e) {
+        $reason = 'shell_exec unavailable: '.$e->getMessage();
+        logLine($config, "classification failed: $reason");
+
+        return ['status' => 'error', 'counts' => null, 'error' => shortError($reason)];
+    }
     $result = $output !== null ? json_decode(trim((string) $output), true) : null;
 
     if (is_array($result) && isset($result['counts'])) {
