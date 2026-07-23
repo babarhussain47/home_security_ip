@@ -6,8 +6,9 @@ declare(strict_types=1);
  * capture-url.php — grabs a single JPEG frame from any ffmpeg-readable
  * stream URL (e.g. an Imou/Tuya cloud live-preview HLS url) and returns the
  * raw JPEG bytes. Deploy alongside capture.php in /var/www/html, sharing its
- * capture-config.local.php. Also deploy classify.py and model/yolov8n.onnx
- * (this repo's model/ dir) into the same directory as this script.
+ * capture-config.local.php. Also deploy classify.py, model/yolov8n.onnx
+ * (this repo's model/ dir), and capture-common.php into the same directory
+ * as this script.
  *
  * Laravel resolves the (signed, time-limited) live-preview URL itself via
  * the vendor's Open Platform API (e.g. ImouService::getLiveStreamUrl()) and
@@ -16,112 +17,26 @@ declare(strict_types=1);
  * camera regardless of local network/IP, and works unchanged for any future
  * provider whose SDK also exposes a playable stream url.
  *
- * Request: POST /capture-url.php
+ * Request: POST /capture-url.php?classify=1
  *   Headers: X-Api-Key: <shared secret>
  *   Body (JSON): { "stream_url": "https://cmgw-sg.easy4ipcloud.com:8890/iot/.../....m3u8?..." }
+ *
+ * Classification only runs when ?classify=1 (or true/yes) is passed — it
+ * adds real latency (Python startup + inference), so callers opt in per
+ * request instead of it always running. Omit it (or pass 0) to just get the
+ * frame back as fast as ffmpeg allows.
  *
  * Response: same envelope as capture.php — 200 + image/jpeg bytes on
  * success, or JSON {code, desc, data} on failure. On success, the
  * X-Detection-Status header is always one of ok|skipped|error: ok pairs with
- * X-Detections (JSON counts), error pairs with X-Detection-Error (truncated
- * message, also logged server-side per 'log_file' in the config).
+ * X-Detections (JSON counts), error/skipped pair with X-Detection-Error
+ * (short reason, full detail logged server-side per 'log_file' in config).
  */
 
 $config = require '/var/www/capture-config.local.php';
+require __DIR__.'/capture-common.php';
 
 const TIMEOUT_SECONDS = 60; // cloud HLS handshake can be slow, especially over weak camera wifi
-
-// Model ships in this repo at model/yolov8n.onnx and is deployed alongside
-// this script, so the path is fixed — no per-server config needed for it.
-// classifier_python still comes from config since the Python env legitimately
-// differs per server (system python3 vs a dedicated venv).
-const MODEL_PATH = __DIR__.'/model/yolov8n.onnx';
-
-// Collapses a possibly multi-line traceback/output blob down to one short
-// line for the response header — full detail still goes to the log file.
-function shortError(string $text): string
-{
-    $lines = array_values(array_filter(array_map('trim', explode("\n", $text)), fn ($l) => $l !== ''));
-    $line = end($lines) ?: 'unknown error';
-
-    return mb_substr($line, 0, 150);
-}
-
-// Keeps a copy of the last captured frame at a fixed path for manual
-// inspection, purely a debugging aid — the real response still streams from
-// the per-request tempnam() file so concurrent requests never collide.
-// No-op unless 'debug_image_path' is set in the config.
-function saveDebugImage(array $config, string $capturedFile): void
-{
-    if (! empty($config['debug_image_path']) && file_exists($capturedFile)) {
-        @copy($capturedFile, $config['debug_image_path']);
-    }
-}
-
-function logLine(array $config, string $message): void
-{
-    $logFile = $config['log_file'] ?? sys_get_temp_dir().'/capture-url.log';
-    $line = sprintf('[%s] %s%s', date('Y-m-d H:i:s'), $message, PHP_EOL);
-    @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
-}
-
-function fail(int $status, string $message): never
-{
-    global $config;
-    logLine($config ?? [], "FAIL [$status] $message");
-    http_response_code($status);
-    header('Content-Type: application/json');
-    echo json_encode(['code' => $status, 'desc' => $message, 'data' => new stdClass()]);
-    exit;
-}
-
-// Best-effort YOLOv8n classification of the captured frame. Never
-// throws/fails the request if the classifier isn't configured or errors out
-// — returning the captured frame is the actual requirement here, detection
-// counts are a bonus. Status is always reported back via response headers
-// (see X-Detection-Status) and failures are logged, so a silent miss is
-// visible instead of just absent.
-function classify(array $config, string $imagePath): array
-{
-    if (empty($config['classifier_python'])) {
-        return ['status' => 'skipped', 'counts' => null, 'error' => 'classifier_python not set in capture-config.local.php'];
-    }
-    if (! is_file($config['classifier_python'])) {
-        $reason = "classifier_python does not exist: {$config['classifier_python']}";
-        logLine($config, "classification skipped: $reason");
-
-        return ['status' => 'skipped', 'counts' => null, 'error' => $reason];
-    }
-    if (! is_file(MODEL_PATH)) {
-        $reason = 'model file missing: '.MODEL_PATH;
-        logLine($config, "classification skipped: $reason");
-
-        return ['status' => 'skipped', 'counts' => null, 'error' => $reason];
-    }
-
-    $cmd = sprintf(
-        '%s %s %s %s 2>&1',
-        escapeshellarg($config['classifier_python']),
-        escapeshellarg(__DIR__.'/classify.py'),
-        escapeshellarg(MODEL_PATH),
-        escapeshellarg($imagePath),
-    );
-
-    $output = shell_exec($cmd);
-    $result = $output !== null ? json_decode(trim((string) $output), true) : null;
-
-    if (is_array($result) && isset($result['counts'])) {
-        return ['status' => 'ok', 'counts' => $result['counts'], 'error' => null];
-    }
-
-    $rawError = is_array($result) && isset($result['error'])
-        ? $result['error']
-        : trim((string) $output);
-
-    logLine($config, "classification failed: $rawError");
-
-    return ['status' => 'error', 'counts' => null, 'error' => shortError($rawError)];
-}
 
 $providedKey = $_SERVER['HTTP_X_API_KEY'] ?? '';
 if ($providedKey === '' || ! hash_equals($config['api_key'], $providedKey)) {
@@ -144,6 +59,8 @@ $parts = parse_url($streamUrl);
 if ($streamUrl === '' || $parts === false || ! in_array($parts['scheme'] ?? '', ['http', 'https'], true)) {
     fail(422, 'A valid http(s) stream_url is required');
 }
+
+$classificationRequested = filter_var($_GET['classify'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
 $outputFile = tempnam(sys_get_temp_dir(), 'cap_').'.jpg';
 
@@ -198,7 +115,9 @@ if ($exitCode !== 0 || ! file_exists($outputFile) || filesize($outputFile) === 0
 
 saveDebugImage($config, $outputFile);
 
-$detection = classify($config, $outputFile);
+$detection = $classificationRequested
+    ? classify($config, $outputFile)
+    : ['status' => 'skipped', 'counts' => null, 'error' => 'classification not requested (add ?classify=1)'];
 
 $bytes = file_get_contents($outputFile);
 @unlink($outputFile);
