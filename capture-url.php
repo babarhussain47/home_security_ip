@@ -55,8 +55,29 @@ function fail(int $status, string $message): never
 // visible instead of just absent.
 function classify(array $config, string $imagePath): array
 {
-    if (empty($config['classifier_python']) || empty($config['classifier_model'])) {
-        return ['status' => 'skipped', 'counts' => null, 'error' => null];
+    $missing = [];
+    if (empty($config['classifier_python'])) {
+        $missing[] = 'classifier_python';
+    }
+    if (empty($config['classifier_model'])) {
+        $missing[] = 'classifier_model';
+    }
+    if ($missing !== []) {
+        $reason = implode(', ', $missing).' not set in capture-config.local.php';
+        return ['status' => 'skipped', 'counts' => null, 'error' => $reason];
+    }
+
+    if (! is_file($config['classifier_python'])) {
+        $reason = "classifier_python does not exist: {$config['classifier_python']}";
+        logLine($config, "classification skipped: $reason");
+
+        return ['status' => 'skipped', 'counts' => null, 'error' => $reason];
+    }
+    if (! is_file($config['classifier_model'])) {
+        $reason = "classifier_model does not exist: {$config['classifier_model']}";
+        logLine($config, "classification skipped: $reason");
+
+        return ['status' => 'skipped', 'counts' => null, 'error' => $reason];
     }
 
     $cmd = sprintf(
@@ -165,7 +186,7 @@ header('Content-Length: '.strlen($bytes));
 header('X-Detection-Status: '.$detection['status']); // ok | skipped | error
 if ($detection['status'] === 'ok') {
     header('X-Detections: '.json_encode($detection['counts']));
-} elseif ($detection['status'] === 'error') {
+} elseif ($detection['error'] !== null) {
     header('X-Detection-Error: '.substr((string) $detection['error'], 0, 200));
 }
 echo $bytes;
