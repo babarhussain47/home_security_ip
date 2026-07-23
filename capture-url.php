@@ -35,6 +35,30 @@ function fail(int $status, string $message): never
     exit;
 }
 
+// Best-effort YOLOv8n classification of the captured frame. Returns null
+// (never throws/fails the request) if the classifier isn't configured or
+// errors out — returning the captured frame is the actual requirement here,
+// detection counts are a bonus.
+function classify(array $config, string $imagePath): ?array
+{
+    if (empty($config['classifier_python']) || empty($config['classifier_model'])) {
+        return null;
+    }
+
+    $cmd = sprintf(
+        '%s %s %s %s 2>/dev/null',
+        escapeshellarg($config['classifier_python']),
+        escapeshellarg(__DIR__.'/classify.py'),
+        escapeshellarg($config['classifier_model']),
+        escapeshellarg($imagePath),
+    );
+
+    $json = shell_exec($cmd);
+    $result = $json !== null ? json_decode($json, true) : null;
+
+    return is_array($result) ? ($result['counts'] ?? null) : null;
+}
+
 $providedKey = $_SERVER['HTTP_X_API_KEY'] ?? '';
 if ($providedKey === '' || ! hash_equals($config['api_key'], $providedKey)) {
     fail(401, 'Unauthorized');
@@ -106,10 +130,15 @@ if ($exitCode !== 0 || ! file_exists($outputFile) || filesize($outputFile) === 0
     fail(502, 'Capture failed: '.trim(mb_substr($output, -500)));
 }
 
+$detections = classify($config, $outputFile);
+
 $bytes = file_get_contents($outputFile);
 @unlink($outputFile);
 
 http_response_code(200);
 header('Content-Type: image/jpeg');
 header('Content-Length: '.strlen($bytes));
+if ($detections !== null) {
+    header('X-Detections: '.json_encode($detections));
+}
 echo $bytes;

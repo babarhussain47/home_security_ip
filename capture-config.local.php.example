@@ -10,4 +10,9 @@ return [
 
     // Full path to the ffmpeg binary on this server, e.g. `which ffmpeg`.
     'ffmpeg_bin' => '/usr/bin/ffmpeg',
+
+    // Optional: YOLOv8n classification of each captured frame. Leave either
+    // one unset/empty to skip classification entirely (capture still works).
+    'classifier_python' => '/opt/classifier/venv/bin/python3',
+    'classifier_model' => '/opt/classifier/model/yolov8n.onnx',
 ];
