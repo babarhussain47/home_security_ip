@@ -26,9 +26,9 @@ declare(strict_types=1);
  * request instead of it always running. Omit it (or pass 0) to just get the
  * frame back as fast as ffmpeg allows.
  *
- * ?ping=1 (or true/yes) short-circuits everything below the api key check
- * and just returns 200 — a cheap way to verify the endpoint is reachable
- * and authenticated without spawning ffmpeg.
+ * Body { "ping": true } short-circuits everything below the JSON body
+ * parse and just returns 200 — a cheap way to verify the endpoint is
+ * reachable and authenticated without spawning ffmpeg.
  *
  * Response: same envelope as capture.php — 200 + image/jpeg bytes on
  * success, or JSON {code, desc, data} on failure. On success, the
@@ -47,11 +47,6 @@ if ($providedKey === '' || ! hash_equals($config['api_key'], $providedKey)) {
     fail(401, 'Unauthorized');
 }
 
-if (filter_var($_GET['ping'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
-    http_response_code(200);
-    exit;
-}
-
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     fail(405, 'Method not allowed');
 }
@@ -59,6 +54,11 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 $body = json_decode((string) file_get_contents('php://input'), true);
 if (! is_array($body)) {
     fail(422, 'Invalid JSON body');
+}
+
+if (filter_var($body['ping'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+    http_response_code(200);
+    exit;
 }
 
 $streamUrl = (string) ($body['stream_url'] ?? '');
