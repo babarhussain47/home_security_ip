@@ -26,6 +26,10 @@ declare(strict_types=1);
  * request instead of it always running. Omit it (or pass 0) to just get the
  * frame back as fast as ffmpeg allows.
  *
+ * ?ping=1 (or true/yes) short-circuits everything below the api key check
+ * and just returns 200 — a cheap way to verify the endpoint is reachable
+ * and authenticated without spawning ffmpeg.
+ *
  * Response: same envelope as capture.php — 200 + image/jpeg bytes on
  * success, or JSON {code, desc, data} on failure. On success, the
  * X-Detection-Status header is always one of ok|skipped|error: ok pairs with
@@ -41,6 +45,11 @@ const TIMEOUT_SECONDS = 60; // cloud HLS handshake can be slow, especially over 
 $providedKey = $_SERVER['HTTP_X_API_KEY'] ?? '';
 if ($providedKey === '' || ! hash_equals($config['api_key'], $providedKey)) {
     fail(401, 'Unauthorized');
+}
+
+if (filter_var($_GET['ping'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+    http_response_code(200);
+    exit;
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
